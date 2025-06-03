@@ -7,8 +7,12 @@ import logging
 
 import requests
 
-from odoo import _, api, models
-from odoo.exceptions import UserError
+from odoo import _, api, models, fields
+try:
+    from odoo.exceptions import UserError
+except ImportError:
+    class UserError(Exception):
+        pass
 
 logger = logging.getLogger(__name__)
 try:
@@ -23,6 +27,15 @@ TIMEOUT = 5
 
 class ResPartner(models.Model):
     _inherit = "res.partner"
+    
+    ape = fields.Char("APE Code")
+    ape_label = fields.Char("APE Label")
+    creation_date = fields.Date()
+    staff = fields.Char("# Staff")
+    category = fields.Char()
+    statut_siren = fields.Char()
+    est_le_siege = fields.Boolean()
+    statut_siret = fields.Char()
 
     @api.model
     def _opendatasoft_fields_list(self):
@@ -45,6 +58,9 @@ class ResPartner(models.Model):
             "divisionunitelegale",
             "naturejuridiqueunitelegale",
             "trancheeffectifsunitelegale",
+            "etatadministratifunitelegale",
+            "etablissementsiege",
+            "etatadministratifetablissement",
         ]
 
     @api.model
@@ -122,6 +138,14 @@ class ResPartner(models.Model):
                 "city": raw_record.get("libellecommuneetablissement"),
                 "siren": raw_record.get("siren") and str(raw_record["siren"]) or False,
                 "nic": raw_record.get("nic"),
+                "ape": raw_record.get("activiteprincipaleunitelegale"),
+                "ape_label": raw_record.get("divisionunitelegale"),
+                "category": raw_record.get("categorieentreprise"),
+                "creation_date": raw_record.get("datecreationunitelegale"),
+                "staff": raw_record.get("trancheeffectifsunitelegale", 0),
+                "statut_siren": raw_record.get("etatadministratifunitelegale"),
+                "est_le_siege": True if raw_record.get("etablissementsiege") and raw_record.get("etablissementsiege") == "oui" else False,
+                "statut_siret": raw_record.get("etatadministratifetablissement"),
             }
             # In feb 2022, they changed codepostaletablissement and
             # codedepartementetablissement from string to integer
@@ -174,23 +198,9 @@ class ResPartner(models.Model):
 
     @api.model
     def _siren2vat_vies(self, siren, raise_if_fail=False):
-        vat = "FR%s" % siren_to_vat(siren)
-        logger.info("VIES check of VAT %s" % vat)
-        vies_res = False
-        res = False
-        try:
-            vies_res = check_vies(vat, timeout=TIMEOUT)
-            logger.debug("VIES answer vies_res.valid=%s", vies_res.valid)
-        except Exception as e:
-            logger.error("VIES query failed: %s", e)
-            if raise_if_fail:
-                raise UserError(
-                    _("Failed to query VIES.\nTechnical error: %s.") % e
-                ) from e
-            return None
-        if vies_res and vies_res.valid:
-            res = vat
-        return res
+        # Désactivation de l'appel VIES
+        logger.info("VIES check désactivé pour %s", siren)
+        return None  # ou False selon le besoin
 
     @api.model
     def _opendatasoft_get_first_result(
@@ -212,7 +222,7 @@ class ResPartner(models.Model):
     def _opendatasoft_get_from_siren(self, siren, vat_vies_query=True):
         if siren and siren_is_valid(siren):
             vals = self._opendatasoft_get_first_result(
-                "siren:%s AND etablissementsiege:oui" % siren,
+                "siren:%s AND etablissementsiege:oui AND etatadministratifetablissement:Actif" % siren,
                 vat_vies_query=vat_vies_query,
             )
             if vals and vals.get("siren") == siren:
@@ -223,7 +233,7 @@ class ResPartner(models.Model):
     def _opendatasoft_get_from_siret(self, siret, vat_vies_query=True):
         if siret and siret_is_valid(siret):
             vals = self._opendatasoft_get_first_result(
-                "siret:%s" % siret, vat_vies_query=vat_vies_query
+                "siret:%s AND etatadministratifetablissement:Actif" % siret, vat_vies_query=vat_vies_query
             )
             if vals and vals.get("siren") and vals.get("nic"):
                 vals_siret = vals["siren"] + vals["nic"]
